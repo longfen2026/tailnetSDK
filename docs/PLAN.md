@@ -7,7 +7,7 @@
 | 里程碑 | 交付物 | 验收标准 | 状态 |
 |---|---|---|---|
 | **M0** | `core` 包（登录/状态/注销/设备列表/隧道/增强能力）、`cli/tailnetctl`、`examples/quickstart`、`build/` 脚本 | `go build ./...`、`go vet ./...`、`go test ./...` 全绿；CLI 能拿到真实登录 URL；状态可持久化并回读 | ✅ 已完成 |
-| **M1** | 状态机与事件流打磨；真实 tailnet 端到端验收（双节点 dial/listen + WhoIs）；CI 接入 `tstestcontrol` 本地控制面自动化测试 | 两个节点互相 `dial`/`listen` 成功；`WhoIs` 能解析对端身份；CI 在无外网凭据下可回归 | 进行中 |
+| **M1** | 本地控制面（`tstest/integration/testcontrol` + 本地 DERP/STUN）自动化集成测试：登录生命周期、设备发现、双节点隧道 + WhoIs、HTTP、SOCKS5、注销、事件流；CI workflow | 两个节点互相 `dial`/`listen` 成功；`WhoIs` 能解析对端身份；CI 在无外网凭据下可回归 | ✅ 已完成（本地控制面 7 项集成测试全绿；真实云端双节点验收待有 tailnet 账号时补充，可并入 M2 期间） |
 | **M2** | `bind/ffi`（C ABI）+ Windows `c-shared` DLL + C# P/Invoke 封装 + macOS `c-archive`/xcframework + Swift 封装 | 示例程序无需安装 Tailscale、无需管理员权限即可登录并访问 tailnet 服务 | 计划 |
 | **M3** | `bind/gomobile` + Android AAR + Kotlin 封装 + 前台服务 + Custom Tabs 登录 | **首日做 `gomobile bind` 可行性 POC**；Demo APK 登录后经本地 SOCKS5 访问 tailnet 服务；进程重启后状态可恢复 | 计划 |
 | **M4** | iOS/macOS xcframework + Swift `TailnetClient` + `URLSession` 走本地 SOCKS5（参考 upstream `libtailscale/swift` 的构建脚本与 TailscaleKit 的 URLSession 设计） | 真机登录并访问 tailnet 服务；模拟器/真机 framework 均可构建；App 挂起恢复后状态读取正常 | 计划 |
@@ -32,6 +32,7 @@
 | 用户态模式无法接管任意 App 流量 | 产品预期偏差 | README/API 文档明确边界；提供本地 SOCKS5/HTTP 代理供非 Go 网络栈接入 | 已文档化 |
 | 包体与内存（Go + gVisor） | 分发压力 | `-ldflags "-s -w"`、`ts_omit_*` 裁剪（官方 Android 用 `ts_omit_cachenetmap`）、按 ABI 拆分 | 待 M2 建立体积基线 |
 | 与官方 Tailscale 客户端同时开启 VPN | 冲突（仅 TUN 路线） | 用户态路线无冲突；TUN 路线需在 UI 提示互斥 | 待 M5 处理 |
+| 双节点 TCP 数据在 DERP/DISCO 握手完成前可能被静默丢弃 | 集成测试假失败（连接已建立但无数据） | 建链前先做 TSMP Ping 预热（`waitReachable`），对齐上游 tsnet 测试做法 | 已规避 |
 | 控制面为官方 | 账号/设备额度、ACL、Tailnet Lock 均受官方约束 | 文档说明；`Config.ControlURL` 保留切换自建控制面的能力 | 已文档化 |
 
 ## 本地验证记录（M0）
@@ -46,3 +47,23 @@ cli 版本/帮助     -> 正常输出
 ```
 
 `data/` 存放节点状态（含节点私钥），已在 `.gitignore` 中排除；如需重置本机测试身份，删除对应目录即可。
+
+## 本地验证记录（M1）
+
+`go test ./core/ -count=1 -v -timeout 15m`：本地控制面（testcontrol）+ 本地 DERP/STUN，
+全程离线、无需任何 Tailscale 账号或凭据：
+
+```
+--- PASS: TestStateFromIPN / TestMapStatusAndPeers / TestMapStatusNilSafe / TestFindPeer / TestEventJSON / TestConfigDefaults / TestErrorCode
+--- PASS: TestIntegrationAuthLifecycle          (1.09s) 登录→Running、用户态(TUN=false)、100.64/10 地址、MagicDNS、Profile.ControlURL、已授权时 LoginURL 报错
+--- PASS: TestIntegrationPeerDiscovery          (1.40s) 双节点互见（tailnet IP + DNS 名）
+--- PASS: TestIntegrationTunnelEcho             (1.42s) MagicDNS 拨号 sdk-a:8080 + echo 回环 + WhoIs 归因
+--- PASS: TestIntegrationHTTPClientOverTailnet  (1.38s) Node.HTTPClient 请求 tailnet 内 HTTP 服务
+--- PASS: TestIntegrationSOCKS5Proxy            (1.37s) golang.org/x/net/proxy 经本地 SOCKS5 访问 tailnet 服务
+--- PASS: TestIntegrationLogout                 (0.75s) 注销后离开 Running
+--- PASS: TestIntegrationWatchEvents            (0.74s) Watch 事件流（state/self/peers）
+ok  tailnetsdk/core  8.276s    （build + vet 同绿）
+```
+
+运行方式：`go test ./core/ -run TestIntegration -count=1`；快速跳过：`go test -short ./core/`。
+CI：`.github/workflows/ci.yml` 三平台构建 + ubuntu 集成测试 job。
