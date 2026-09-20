@@ -1,0 +1,28 @@
+# Build output
+/dist/
+/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.aar
+*.framework/
+*.xcframework/
+
+# Local node state (contains the node private key - never commit)
+/data/
+tailnetsdk-data/
+*.state
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Go
+*.test
+*.out
+coverage.txt
+
