@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- TailnetSdk.cs uses unsafe pointer marshalling for the native ABI. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>tailnet-demo</AssemblyName>
+    <RootNamespace>Tailnet.Demo</RootNamespace>
+  </PropertyGroup>
+
+  <!-- The P/Invoke wrapper lives next door; compile it straight in. -->
+  <ItemGroup>
+    <Compile Include="..\..\bind\dotnet\TailnetSdk.cs" Link="TailnetSdk.cs" />
+  </ItemGroup>
+
+  <!-- The native library must sit next to the executable for DllImport("tailnet"). -->
+  <ItemGroup>
+    <None Include="..\..\dist\tailnet.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

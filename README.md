@@ -87,7 +87,7 @@ docs/             设计文档
 |---|---|---|
 | M0 | 仓库骨架、`core` 全部能力、`tailnetctl` CLI、构建/测试脚本 | ✅ |
 | M1 | 本地控制面自动化集成测试（登录生命周期/设备发现/双节点隧道+WhoIs/HTTP/SOCKS5/注销/事件流）、CI workflow | ✅ |
-| M2 | Windows + macOS 桌面绑定（`c-shared`/`c-archive` + C#/Swift 封装） | 计划 |
+| M2 | Windows + macOS 桌面绑定（`c-shared`/`c-archive` + C#/Swift 封装） | Windows ✅（DLL + C# 封装 + demo 已验证）；macOS 待 macOS 构建机 |
 | M3 | Android AAR（`gomobile bind`，先做可行性 POC，失败则回退手写 JNI） | 计划 |
 | M4 | iOS/macOS xcframework + Swift 封装（`URLSession` 经本地 SOCKS5 访问 tailnet） | 计划 |
 | M5（可选） | TUN 真 VPN：Android `VpnService`（`addAllowedApplication` 仅本 App）、Windows wintun、macOS/iOS Network Extension | 评估中 |

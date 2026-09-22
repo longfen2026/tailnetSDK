@@ -8,7 +8,7 @@
 |---|---|---|---|
 | **M0** | `core` 包（登录/状态/注销/设备列表/隧道/增强能力）、`cli/tailnetctl`、`examples/quickstart`、`build/` 脚本 | `go build ./...`、`go vet ./...`、`go test ./...` 全绿；CLI 能拿到真实登录 URL；状态可持久化并回读 | ✅ 已完成 |
 | **M1** | 本地控制面（`tstest/integration/testcontrol` + 本地 DERP/STUN）自动化集成测试：登录生命周期、设备发现、双节点隧道 + WhoIs、HTTP、SOCKS5、注销、事件流；CI workflow | 两个节点互相 `dial`/`listen` 成功；`WhoIs` 能解析对端身份；CI 在无外网凭据下可回归 | ✅ 已完成（本地控制面 7 项集成测试全绿；真实云端双节点验收待有 tailnet 账号时补充，可并入 M2 期间） |
-| **M2** | `bind/ffi`（C ABI）+ Windows `c-shared` DLL + C# P/Invoke 封装 + macOS `c-archive`/xcframework + Swift 封装 | 示例程序无需安装 Tailscale、无需管理员权限即可登录并访问 tailnet 服务 | 计划 |
+| **M2** | `bind/ffi`（C ABI）+ Windows `c-shared` DLL + C# P/Invoke 封装 + macOS `c-archive`/xcframework + Swift 封装 | 示例程序无需安装 Tailscale、无需管理员权限即可登录并访问 tailnet 服务 | **Windows 分支已完成**（见下方验证记录）；macOS/Swift 分支需 macOS 构建机，待环境就绪 |
 | **M3** | `bind/gomobile` + Android AAR + Kotlin 封装 + 前台服务 + Custom Tabs 登录 | **首日做 `gomobile bind` 可行性 POC**；Demo APK 登录后经本地 SOCKS5 访问 tailnet 服务；进程重启后状态可恢复 | 计划 |
 | **M4** | iOS/macOS xcframework + Swift `TailnetClient` + `URLSession` 走本地 SOCKS5（参考 upstream `libtailscale/swift` 的构建脚本与 TailscaleKit 的 URLSession 设计） | 真机登录并访问 tailnet 服务；模拟器/真机 framework 均可构建；App 挂起恢复后状态读取正常 | 计划 |
 | **M5（可选）** | TUN 真 VPN：Android `VpnService`（`addAllowedApplication` 仅本 App 流量）、Windows wintun、macOS/iOS Network Extension | 客户端获得 tailnet IP；exit node / subnet router 生效 | 评估中 |
@@ -67,3 +67,27 @@ ok  tailnetsdk/core  8.276s    （build + vet 同绿）
 
 运行方式：`go test ./core/ -run TestIntegration -count=1`；快速跳过：`go test -short ./core/`。
 CI：`.github/workflows/ci.yml` 三平台构建 + ubuntu 集成测试 job。
+
+## 本地验证记录（M2 — Windows 分支）
+
+工具链：w64devkit (mingw-w64 gcc) → `tools/w64devkit/`；.NET SDK 8.0.425（用户级安装）。
+
+```
+go build -buildmode=c-shared  -> dist/tailnet.dll (22.2MB) + dist/tailnet.h
+PowerShell P/Invoke 冒烟       -> SMOKE_OK（version→new→configure→start→status(NeedsLogin)→close）
+C# demo (dotnet build)        -> 0 警告 0 错误
+C# demo (dotnet run --smoke)  -> state=NeedsLogin，
+                                 取得真实登录 URL https://login.tailscale.com/a/2a8f830141dc
+```
+
+交付物：
+- `bind/ffi/tailnet.go`：语言无关 C ABI（句柄制；configure/status/login/tunnel/proxy/events 全覆盖，
+  JSON 字符串 + `int` 句柄 + 管道 fd 传 socket，供 Kotlin/Swift/C#/Python 等任意宿主调用）
+- `bind/dotnet/TailnetSdk.cs`：零依赖 P/Invoke 封装（`TailnetNode`/`TailnetListener`/
+  `TailnetEventStream`，async API + DTO）
+- `examples/windows-dotnet/`：C# demo（`--smoke` 无账号验证 / 交互登录 / `--logout` / `--proxy`）
+
+重建 DLL：`bind/ffi` 目录下
+`CGO_ENABLED=1 CC=<mingw gcc> go build -ldflags "-s -w" -buildmode=c-shared -o ../../dist/tailnet.dll .`
+（注意 `bind/ffi` 是独立 go.mod，避免把测试依赖带进宿主模块。）
+
