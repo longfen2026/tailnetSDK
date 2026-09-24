@@ -180,7 +180,8 @@ func tailnet_start(sd C.int) C.int {
 }
 
 // tailnet_up starts the node and blocks until it is usable (authorized and
-// connected), or timeout_ms elapses (returns -ETIMEDOUT).
+// connected), or timeoutMS elapses. On any failure it returns -1; the reason
+// (including "context deadline exceeded") is available via tailnet_errmsg.
 //
 //export tailnet_up
 func tailnet_up(sd C.int, timeoutMS C.int) C.int {
@@ -241,6 +242,7 @@ func copyString(out []byte, s string) C.int {
 	out[n] = 0
 	return 0
 }
+
 // ---------------------------------------------------------------------------
 // Status, login and session management
 // ---------------------------------------------------------------------------
@@ -488,16 +490,39 @@ func tailnet_delete_profile(sd C.int, id *C.char) C.int {
 // identically on Windows, macOS, iOS and Android.
 // ---------------------------------------------------------------------------
 
+// bridges records the real tailnet remote address behind each loopback bridge
+// port, so hosts can attribute accepted connections (WhoIs etc.) even though
+// the host-side socket is 127.0.0.1.
+var bridges = struct {
+	mu      sync.Mutex
+	remotes map[int]string
+}{remotes: map[int]string{}}
+
+func recordBridge(port int, remote string) {
+	bridges.mu.Lock()
+	bridges.remotes[port] = remote
+	bridges.mu.Unlock()
+}
+
+func dropBridge(port int) {
+	bridges.mu.Lock()
+	delete(bridges.remotes, port)
+	bridges.mu.Unlock()
+}
+
 // bridge serves exactly one host connection to 127.0.0.1:port and pipes it to
-// tailnetConn until either side closes.
+// tailnetConn until either side closes. The real tailnet remote address is
+// recorded for tailnet_conn_remote_addr.
 func bridge(tailnetConn net.Conn) (port C.int, err error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
 	}
 	port = C.int(ln.Addr().(*net.TCPAddr).Port)
+	recordBridge(int(port), tailnetConn.RemoteAddr().String())
 	go func() {
 		defer ln.Close()
+		defer dropBridge(int(port))
 		host, aerr := ln.Accept()
 		if aerr != nil {
 			tailnetConn.Close()
@@ -617,6 +642,26 @@ func tailnet_accept(lh C.int, portOut *C.int) C.int {
 	return 0
 }
 
+// tailnet_conn_remote_addr copies the real tailnet remote address (ip:port)
+// of a bridged connection into buf. The port must be the loopback bridge port
+// returned by tailnet_dial/tailnet_accept, and the connection must still be
+// open. Returns ERANGE if buf is too small.
+//
+//export tailnet_conn_remote_addr
+func tailnet_conn_remote_addr(port C.int, buf *C.char, size C.size_t) C.int {
+	if buf == nil || size == 0 {
+		return C.EINVAL
+	}
+	bridges.mu.Lock()
+	remote, ok := bridges.remotes[int(port)]
+	bridges.mu.Unlock()
+	if !ok {
+		return C.EBADF
+	}
+	host := unsafe.Slice((*byte)(unsafe.Pointer(buf)), int(size))
+	return copyString(host, remote)
+}
+
 // tailnet_listener_close stops a tailnet listener and invalidates its handle.
 //
 //export tailnet_listener_close
@@ -631,7 +676,6 @@ func tailnet_listener_close(lh C.int) C.int {
 	return C.int(errToRet(ln.Close()))
 }
 
-// errToRet maps an error to 0/-EIO for the few C exports without a node
 // ---------------------------------------------------------------------------
 // Proxy, local IPs, diagnostics and exit nodes
 // ---------------------------------------------------------------------------
@@ -902,13 +946,11 @@ func tailnet_version(buf *C.char, n C.size_t) C.int {
 	return copyString(unsafe.Slice((*byte)(unsafe.Pointer(buf)), int(n)), core.Version)
 }
 
-
-// handle to record lastErr on.
+// errToRet maps an error to 0/-1 for the few C exports that have no node
+// handle to record the message on (the caller only learns success/failure).
 func errToRet(err error) int {
 	if err == nil {
 		return 0
 	}
 	return -1
 }
-
-

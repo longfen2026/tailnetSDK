@@ -62,11 +62,67 @@ conn, err := node.Dial(ctx, "tcp", "backend.tail-scale.ts.net:443")
 ```
 core/             平台无关 Go 核心（SDK 的唯一真相来源）
 cli/tailnetctl/   冒烟/验收 CLI
+bind/ffi/         语言无关 C ABI（Windows tailnet.dll / macOS·iOS c-archive）
+bind/dotnet/      零依赖 C# P/Invoke 封装（TailnetNode / TailnetListener / TailnetEventStream）
+examples/         接入示例（quickstart 为 Go；windows-dotnet 为 .NET）
 build/            Makefile 与 Windows 构建脚本
 docs/             设计文档
 ```
 
 `core` 刻意**不暴露 tailscale.com 的公开类型**：所有返回值都是本仓库自己的 DTO（`Status`/`Peer`/`Event`/`Profile`/`Identity`/`PingResult`），升级 `tailscale.com` 时只需改动 `core/status.go` 的映射层，语言绑定的 ABI 不受影响。
+
+## Windows / .NET 接入
+
+```powershell
+# 1) 构建原生库（需要 mingw-w64 系 gcc，例如 w64devkit）
+pwsh -File build\build.ps1 native      # -> dist\tailnet.dll + dist\tailnet.h
+# 若 gcc 不在 PATH：pwsh -File build\build.ps1 native -CC C:\tools\w64devkit\w64devkit\bin\gcc.exe
+
+# 2) 构建并运行 C# demo（.NET 8+）
+cd examples\windows-dotnet
+dotnet run -- --smoke                  # 离线自检：托管 -> 原生全链路，不联网
+dotnet run                             # 交互登录 + 设备列表 + 隧道诊断
+
+# 3) 独立分发：self-contained 单文件，目标机无需安装 Go / .NET
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish\win-x64
+#   产出：publish\win-x64\tailnet-demo.exe + tailnet.dll（原生库与 exe 并列，DllImport 直接命中）
+```
+
+demo 的常用开关：
+
+| 开关 | 作用 |
+|---|---|
+| `--smoke` | 仅校验 P/Invoke 链路，不访问控制面 |
+| `--dir <path>` | 状态目录（默认 `%TEMP%\tailnet-demo`）；节点身份与登录态存于此 |
+| `--hostname <name>` | tailnet 中的设备名（默认 `demo-win`） |
+| `--ping <tailnet IP>` | TSMP 连通性诊断（等价 `tailscale ping`） |
+| `--dial <host:port>` | 打开一条 tailnet TCP 连接并打印 banner |
+| `--serve <port>` | 把本机 HTTP 服务暴露给 tailnet（响应中带回访问者身份，走 `WhoIs`） |
+| `--proxy` | 打印本地 SOCKS5/HTTP 代理地址，供非 Go 网络栈接入 |
+| `--stay <seconds>` | 保持连接指定秒数后自动退出 |
+| `--logout` | 注销并退出 |
+
+C# 侧最小用法（`Dir` 为必填：App 必须自己拥有可写的状态目录）：
+
+```csharp
+using System.Net.Sockets;
+using Tailnet;
+
+var opt = new TailnetOptions { Dir = dataDir, Hostname = "my-app" };
+using var node = new TailnetNode(opt);
+await node.StartAsync();
+
+var st = await node.GetStatusAsync();
+if (!st.IsRunning())
+{
+    string url = await node.GetLoginUrlAsync();              // 交给系统浏览器打开
+    await node.WaitForRunningAsync(TimeSpan.FromMinutes(5)); // 授权完成后自动返回
+}
+
+using TcpClient tcp = await node.DialAsync("backend:443", TimeSpan.FromSeconds(10));
+```
+
+`bind/dotnet/TailnetSdk.cs` 是**单文件、零 NuGet 依赖**的封装，可直接 `Compile Include` 进任意 .NET 工程；`TailnetListener.AcceptAsync()` 返回的 `TailnetBridgedConnection.RemoteTailnetEndPoint` 携带**真实 tailnet 对端地址**（桥接 socket 本身是 `127.0.0.1`），可直接交给 `WhoIsAsync` 做身份归因。
 
 ## 平台注意事项
 

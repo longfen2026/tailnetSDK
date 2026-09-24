@@ -17,6 +17,9 @@
 tailnetsdk-data/
 *.state
 
+# .NET demo publish output (self-contained drop)
+/examples/windows-dotnet/publish/
+
 # Editors / OS
 .vscode/
 .idea/

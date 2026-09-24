@@ -14,6 +14,8 @@
 //   --proxy      also print the loopback SOCKS5/HTTP proxy address
 
 using System.Diagnostics;
+using System.Net.Sockets;
+using System.Text;
 using Tailnet;
 
 string dir = GetArg("--dir") ?? Path.Combine(Path.GetTempPath(), "tailnet-demo");
@@ -50,6 +52,13 @@ Console.WriteLine($"backend state: {st.State} (client {st.Version})");
 
 if (!st.IsRunning())
 {
+    // --smoke is a pure offline check of the managed -> native chain: it must
+    // not touch the control plane, so it stops before fetching a login URL.
+    if (smoke)
+    {
+        Console.WriteLine("--smoke: not authorized; skipping login URL and interactive wait.");
+        return 0;
+    }
     string url = await node.GetLoginUrlAsync();
     Console.WriteLine();
     Console.WriteLine("Open this URL in your browser to authorize this device:");
@@ -58,11 +67,6 @@ if (!st.IsRunning())
     try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
     catch { /* headless or blocked: the printed URL still works */ }
 
-    if (smoke)
-    {
-        Console.WriteLine("--smoke: skipping the interactive wait.");
-        return 0;
-    }
     Console.Write("waiting for authorization");
     st = await node.WaitForRunningAsync(TimeSpan.FromMinutes(5));
     Console.WriteLine($" -> {st.State}");
@@ -82,6 +86,15 @@ var (v4, v6) = node.GetIps();
 Console.WriteLine();
 Console.WriteLine($"tailnet : {st.TailnetName}");
 Console.WriteLine($"this node: {st.Self?.HostName} {v4} {v6}");
+
+// Freshly restored nodes reach Running before the control plane pushes the
+// peer list; poll briefly so device listing and tunneling see a real netmap.
+for (int i = 0; i < 40 && (st.Peers?.Length ?? 0) == 0; i++)
+{
+    await Task.Delay(500);
+    st = await node.GetStatusAsync();
+}
+
 Console.WriteLine($"devices  : {st.Peers?.Length ?? 0}");
 foreach (TailnetPeer p in st.Peers ?? Array.Empty<TailnetPeer>())
 {
@@ -95,6 +108,93 @@ if (proxy)
     Console.WriteLine();
     Console.WriteLine($"loopback proxy: socks5://tsnet:{cred}@{addr} (also serves HTTP CONNECT)");
     Console.WriteLine("point any SOCKS5-aware HTTP stack at it to route through the tailnet.");
+}
+
+// Optional tunnel verification against a real tailnet device:
+//   --ping 100.115.115.115          TSMP ping (connectivity diagnostic)
+//   --dial 100.115.115.115:22       open a tailnet TCP connection, print any banner
+if (GetArg("--ping") is string pingTarget)
+{
+    TailnetPing ping = await node.PingAsync(pingTarget);
+    Console.WriteLine();
+    Console.WriteLine($"ping {pingTarget}: err={ping.Err ?? "none"} latency={ping.LatencySeconds}s via={ping.Endpoint ?? ping.DERPRegionCode ?? "direct"}");
+}
+
+if (GetArg("--dial") is string dialTargets)
+{
+    foreach (string dialTarget in dialTargets.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        Console.WriteLine();
+        Console.WriteLine($"dialing {dialTarget} over the tailnet...");
+        try
+        {
+            using TcpClient tcp = await node.DialAsync(dialTarget, TimeSpan.FromSeconds(10));
+            tcp.ReceiveTimeout = 5000;
+            Console.WriteLine($"connected: local={tcp.Client.LocalEndPoint} remote={tcp.Client.RemoteEndPoint}");
+            try
+            {
+                var buf = new byte[256];
+                int n = await tcp.Client.ReceiveAsync(buf);
+                Console.WriteLine(n > 0
+                    ? $"banner ({n} bytes): {Encoding.UTF8.GetString(buf, 0, n).TrimEnd()}"
+                    : "connected; peer sent no banner (normal for HTTP/HTTP CONNECT endpoints)");
+            }
+            catch (Exception ex) when (ex is SocketException or IOException)
+            {
+                Console.WriteLine("connected; no banner within 5s (peer waiting for our request).");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"dial failed: {ex.Message}");
+        }
+    }
+}
+
+// --serve <port>: expose a tiny HTTP service to the tailnet. Visit it from
+// any other tailnet device at http://<this node's tailnet IP>:<port>.
+if (GetArg("--serve") is string servePort)
+{
+    TailnetListener ln = await node.ListenAsync(":" + servePort);
+    Console.WriteLine();
+    Console.WriteLine($"serving HTTP on tailnet :{servePort} — visit http://{v4}:{servePort} from another tailnet device");
+    _ = Task.Run(async () =>
+    {
+        while (true)
+        {
+            TailnetBridgedConnection conn;
+            try { conn = await ln.AcceptAsync(); }
+            catch { return; }
+            _ = Task.Run(async () =>
+            {
+                using TailnetBridgedConnection cc = conn;
+                string remote = cc.RemoteTailnetEndPoint != ""
+                    ? cc.RemoteTailnetEndPoint
+                    : cc.Client.Client.RemoteEndPoint?.ToString() ?? "";
+                var buf = new byte[4096];
+                int n;
+                try { n = await cc.Client.Client.ReceiveAsync(buf); }
+                catch { return; }
+                string requestLine = n > 0
+                    ? Encoding.UTF8.GetString(buf, 0, n).Split("\r\n", 2)[0]
+                    : "(empty request)";
+                string who = "";
+                try
+                {
+                    TailnetIdentity id = await node.WhoIsAsync(remote);
+                    who = id.LoginName ?? id.NodeName ?? "";
+                }
+                catch { /* whois is best-effort */ }
+                Console.WriteLine($"  <- {remote} \"{requestLine}\" (identity: {(who == "" ? "n/a" : who)})");
+                string body = $"hello from demo-win over the tailnet! your identity: {who}\n";
+                byte[] resp = Encoding.UTF8.GetBytes(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n" +
+                    $"Content-Length: {Encoding.UTF8.GetByteCount(body)}\r\n\r\n{body}");
+                try { await cc.Client.Client.SendAsync(resp); }
+                catch { /* client hung up */ }
+            });
+        }
+    });
 }
 
 if (staySeconds > 0)

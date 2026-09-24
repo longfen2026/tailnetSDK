@@ -58,6 +58,7 @@ internal static unsafe class Native
     [DllImport(Lib, EntryPoint = "tailnet_listen")] internal static extern int Listen(int sd, byte[] network, byte[] addr, out int listener);
     [DllImport(Lib, EntryPoint = "tailnet_accept")] internal static extern int Accept(int listener, out int port);
     [DllImport(Lib, EntryPoint = "tailnet_listener_close")] internal static extern int ListenerClose(int listener);
+    [DllImport(Lib, EntryPoint = "tailnet_conn_remote_addr")] internal static extern int ConnRemoteAddr(int port, byte[] buf, nuint size);
 
     // --- proxy / diagnostics ------------------------------------------------
     [DllImport(Lib, EntryPoint = "tailnet_proxy_addrs")] internal static extern int ProxyAddrs(int sd, byte[] addr, nuint addrSize, byte[] cred, nuint credSize);
@@ -271,7 +272,7 @@ public sealed class TailnetNode : IDisposable
 
     private static byte[] ZBytes(string s) => Encoding.UTF8.GetBytes(s ?? string.Empty);
 
-    private static string NullTerminated(byte[] buf)
+    internal static string NullTerminated(byte[] buf)
     {
         int end = Array.IndexOf(buf, (byte)0);
         return end < 0 ? Encoding.UTF8.GetString(buf) : Encoding.UTF8.GetString(buf, 0, end);
@@ -327,17 +328,26 @@ public sealed class TailnetListener : IDisposable
     private int _ln;
     internal TailnetListener(int ln) => _ln = ln;
 
-    /// <summary>Accepts the next tailnet connection. Returns a bridged TcpClient.</summary>
-    public Task<TcpClient> AcceptAsync(CancellationToken ct = default) => Task.Run(() =>
+    /// <summary>
+    /// Accepts the next tailnet connection. Returns a bridged TcpClient whose
+    /// <see cref="TailnetBridgedConnection.RemoteTailnetEndPoint"/> carries the
+    /// real peer address (the bridge socket itself is 127.0.0.1).
+    /// </summary>
+    public Task<TailnetBridgedConnection> AcceptAsync(CancellationToken ct = default) => Task.Run(() =>
     {
         int ln = _ln;
         if (ln <= 0) throw new ObjectDisposedException(nameof(TailnetListener));
         int rc = Native.Accept(ln, out int port);
         if (rc != 0) throw new TailnetException($"accept failed (rc={rc})");
+        // Fetch the real tailnet peer address while the bridge is alive.
+        string remote = "";
+        byte[] buf = new byte[128];
+        if (Native.ConnRemoteAddr(port, buf, (nuint)buf.Length) == 0)
+            remote = TailnetNode.NullTerminated(buf);
         var tcp = new TcpClient();
         try { tcp.Connect("127.0.0.1", port); }
         catch { tcp.Dispose(); throw; }
-        return tcp;
+        return new TailnetBridgedConnection(tcp, remote);
     }, ct);
 
     public void Dispose()
@@ -347,6 +357,25 @@ public sealed class TailnetListener : IDisposable
         GC.SuppressFinalize(this);
     }
     ~TailnetListener() => Dispose();
+}
+
+/// <summary>A tailnet connection bridged over a loopback socket. The peer's
+/// real tailnet address is available via <see cref="RemoteTailnetEndPoint"/>;
+/// use <see cref="TailnetNode.WhoIsAsync"/> on it to identify the visitor.</summary>
+public sealed class TailnetBridgedConnection : IDisposable
+{
+    public TcpClient Client { get; }
+    /// <summary>Real tailnet address (ip:port) of the remote peer, or empty if
+    /// it could not be determined.</summary>
+    public string RemoteTailnetEndPoint { get; }
+
+    internal TailnetBridgedConnection(TcpClient client, string remoteTailnetEndPoint)
+    {
+        Client = client;
+        RemoteTailnetEndPoint = remoteTailnetEndPoint;
+    }
+
+    public void Dispose() => Client.Dispose();
 }
 
 /// <summary>A live event stream from the node.</summary>

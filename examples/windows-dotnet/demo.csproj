@@ -16,9 +16,11 @@
     <Compile Include="..\..\bind\dotnet\TailnetSdk.cs" Link="TailnetSdk.cs" />
   </ItemGroup>
 
-  <!-- The native library must sit next to the executable for DllImport("tailnet"). -->
+  <!-- The native library must sit next to the executable for DllImport("tailnet").
+       ExcludeFromSingleFile keeps it a real file (not self-extracted to %TEMP%)
+       so that DllImport resolves it directly from the application directory. -->
   <ItemGroup>
-    <None Include="..\..\dist\tailnet.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\dist\tailnet.dll" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>

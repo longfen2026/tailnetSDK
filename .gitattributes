@@ -1,0 +1,12 @@
+# Keep source files LF in the working tree as well as in the object store.
+#
+# Without this, Git for Windows checks files out with CRLF and `gofmt -l`
+# reports every .go file as unformatted (gofmt rewrites CRLF to LF), which
+# makes local checks noisy and hides real formatting problems.
+*.go    text eol=lf
+*.cs    text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.mod   text eol=lf
+*.sum   text eol=lf
