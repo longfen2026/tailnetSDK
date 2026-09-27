@@ -8,14 +8,15 @@
 
 ## 能力矩阵（对需求逐条落地）
 
-| SDK 能力 | 实现 | 状态 |
-|---|---|---|
-| 登录授权 | `Node.StartLoginInteractive` / `Node.LoginURL`（浏览器打开 URL，节点通过控制连接自动感知授权完成，**无需回调 URI**） | ✅ M0 |
-| 授权状态查询 | `Node.Status` / `Node.StatusWithoutPeers` / `Node.Watch`（事件流） | ✅ M0 |
-| 注销 | `Node.Logout`，另有 `ProfileStatus` / `SwitchProfile` / `DeleteProfile` | ✅ M0 |
-| 设备列表 | `Node.Peers`（名称、DNS 名、IP、OS、在线、最后在线、密钥过期、标签） | ✅ M0 |
-| tailnet 隧道 | `Node.Dial` / `Node.Listen` / `Node.HTTPClient` / `Node.StartProxy`（本地 SOCKS5 + HTTP 代理，给非 Go 代码用） | ✅ M0 |
-| 增强能力 | `Node.SetExitNode` / `ClearExitNode` / `Ping` / `WhoIs` | ✅ M0 |
+| SDK 能力 | 实现与关键机制 | 支持平台 | 状态 |
+|---|---|---|---|
+| **登录授权** | `StartLoginInteractive` / `AuthURL`（系统浏览器打开 URL，后台自动感知授权完成，**无需回调 URI**） | Windows / macOS / iOS / Android | ✅ 已落地 |
+| **授权状态查询** | `Status` / `State` / `Watch`（全量状态快照 + 响应式推送事件流） | Windows / macOS / iOS / Android | ✅ 已落地 |
+| **注销与多身份** | `Logout` / `ProfileStatus` / `SwitchProfile` | Windows / macOS / iOS / Android | ✅ 已落地 |
+| **设备列表** | `Peers`（主机名、MagicDNS 域名、tailnet IP、OS、在线、最后活跃、密钥过期） | Windows / macOS / iOS / Android | ✅ 已落地 |
+| **tailnet 隧道** | 进程内 Dial / Listen；127.0.0.1 TCP 桥接（非 Unix socketpair，兼容各端）；内置 SOCKS5 + HTTP 代理 | Windows / macOS / iOS / Android | ✅ 已落地 |
+| **身份归因 (WhoIs)** | 记录真实对端地址；`WhoIs(remoteAddr)` 解析用户与设备名称 | Windows / macOS / iOS / Android | ✅ 已落地 |
+| **持久化与免登录** | 基于 `tailscaled.state`，固定目录长期保持身份（见 `docs/PERSISTENCE.md`） | Windows / macOS / iOS / Android | ✅ 已规范化 |
 
 ## 快速开始
 
@@ -122,6 +123,9 @@ if (!st.IsRunning())
 }
 
 using TcpClient tcp = await node.DialAsync("backend:443", TimeSpan.FromSeconds(10));
+```
+
+`bind/dotnet/TailnetSdk.cs` 是**单文件、零 NuGet 依赖**的封装，可直接 `Compile Include` 进任意 .NET 工程；`TailnetListener.AcceptAsync()` 返回的 `TailnetBridgedConnection.RemoteTailnetEndPoint` 携带**真实 tailnet 对端地址**（桥接 socket 本身是 `127.0.0.1`），可直接交给 `WhoIsAsync` 做身份归因。
 
 ## Android 接入 (AAR)
 
@@ -175,17 +179,13 @@ let (data, _) = try await session.data(from: URL(string: "http://my-peer.tailnet
 ```
 详见 [bind/apple/README.md](bind/apple/README.md)。
 
-
-```
-
-`bind/dotnet/TailnetSdk.cs` 是**单文件、零 NuGet 依赖**的封装，可直接 `Compile Include` 进任意 .NET 工程；`TailnetListener.AcceptAsync()` 返回的 `TailnetBridgedConnection.RemoteTailnetEndPoint` 携带**真实 tailnet 对端地址**（桥接 socket 本身是 `127.0.0.1`），可直接交给 `WhoIsAsync` 做身份归因。
-
 ## 平台注意事项
 
 - **Windows / macOS**：直接 `go build`，无需管理员权限。
 - **Android**：`core` 编译不需要 Android SDK；打包 AAR 需要 Android SDK/NDK + `gomobile bind`（M3）。
 - **iOS / macOS framework**：需要 macOS + Xcode，用 `-buildmode=c-archive` + `-tags ios`（M4）。
 - **后台存活**：用户态模式下进程被挂起即断连（iOS 尤其明显）。因此 SDK 的状态查询走**进程内 LocalAPI**（`Node.LocalClient`），不使用 loopback TCP 监听——后者在 iOS 挂起恢复后会失效。
+- **持久化与免登录**：节点密钥与身份完全由 `Dir` 下的 `tailscaled.state` 决定。宿主 App 应指定固定的持久化目录（避免系统临时目录或频繁切换），并保持 `Ephemeral = false`，详见 [docs/PERSISTENCE.md](docs/PERSISTENCE.md)。
 - **代理与系统 VPN 的差异**：SDK 只让**显式经由 SDK 的连接**（Dial/Listen/HttpClient/SOCKS5 代理）走 tailnet，不会接管宿主 App 的其它流量；需要系统级 VPN 请走 TUN 路线（不在本期范围）。
 
 ## 版本与依赖
@@ -193,13 +193,13 @@ let (data, _) = try await session.data(from: URL(string: "http://my-peer.tailnet
 - Go 1.27.1（与 `tailscale.com` v1.102.4 的 `go` 指令一致）
 - `tailscale.com v1.102.4`，BSD-3-Clause；本仓库同样遵循 BSD-3-Clause 的集成要求（保留版权声明，且不得使用 Tailscale 商标）
 
-## 路线图
+## 路线图与当前交付进度
 
-| 里程碑 | 内容 | 状态 |
-|---|---|---|
-| M0 | 仓库骨架、`core` 全部能力、`tailnetctl` CLI、构建/测试脚本 | ✅ |
-| M1 | 本地控制面自动化集成测试（登录生命周期/设备发现/双节点隧道+WhoIs/HTTP/SOCKS5/注销/事件流）、CI workflow | ✅ |
-| M2 | Windows + macOS 桌面绑定（`c-shared`/`c-archive` + C#/Swift 封装） | Windows ✅（DLL + C# 封装 + demo 已验证）；macOS 待 macOS 构建机 |
-| M3 | Android AAR（`gomobile bind`，先做可行性 POC，失败则回退手写 JNI） | 计划 |
-| M4 | iOS/macOS xcframework + Swift 封装（`URLSession` 经本地 SOCKS5 访问 tailnet） | 计划 |
-| M5（可选） | TUN 真 VPN：Android `VpnService`（`addAllowedApplication` 仅本 App）、Windows wintun、macOS/iOS Network Extension | 评估中 |
+| 里程碑 | 内容 | 状态 | 产物 |
+|---|---|---|---|
+| **M0** | 核心引擎与架构（登录/状态/注销/设备发现/隧道/增强能力/CLI） | ✅ 已完成 | `core/`、`cli/tailnetctl` |
+| **M1** | 本地控制面（testcontrol）7 项自动化集成测试、CI workflow | ✅ 已完成 | `core/integration_test.go` (13/13 PASS) |
+| **M2** | C ABI 共享库 + Windows .NET 绑定与自包含发布 | ✅ 已完成 | `dist/tailnet.dll`、`bind/dotnet/`、`examples/windows-dotnet` |
+| **M3** | Android AAR 移动端绑定与 POC | ✅ 首日 POC 达成 | `dist/tailnet.aar` (4 架构全支持)、`bind/gomobile/` |
+| **M4** | Apple macOS/iOS Swift 绑定与 XCFramework 构建框架 | 🟡 框架脚本就绪 | `bind/apple/` (`TailnetKit` + `URLSession` + `build-xcframework.sh`) |
+| **M5（可选）** | TUN 真 VPN 路线（VpnService / wintun / NetworkExtension） | 评估中 | 用户态满足内网互通需求，暂不引入侵入性 TUN |
