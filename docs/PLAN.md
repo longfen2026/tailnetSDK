@@ -33,7 +33,7 @@
 | 包体与内存（Go + gVisor） | 分发压力 | `-ldflags "-s -w"`、`ts_omit_*` 裁剪（官方 Android 用 `ts_omit_cachenetmap`）、按 ABI 拆分 | 待 M2 建立体积基线 |
 | 与官方 Tailscale 客户端同时开启 VPN | 冲突（仅 TUN 路线） | 用户态路线无冲突；TUN 路线需在 UI 提示互斥 | 待 M5 处理 |
 | 宿主侧桥接连接的 `RemoteAddr` 恒为 `127.0.0.1` | `WhoIs` 无法归因对端身份 | FFI 建桥时记录真实地址，新增 `tailnet_conn_remote_addr`；宿主侧 `RemoteTailnetEndPoint` 暴露 | 已规避（M2 实测通过） |
-| demo 进程退出后节点在 tailnet 中消失（多次复现） | 每次启动需重新授权，影响体验 | 已确认是官方控制面行为而非 SDK bug：非 `Ephemeral` 节点也应长期保留，需在管理后台核对是否为重复注册；后续在 M4 用持久化 keystore 固定节点 key 后再复验 | 观察中（已记录，M4 复验） |
+| demo 进程退出后节点在 tailnet 中消失（多次复现） | 每次启动需重新授权，影响体验 | 已完成机理分析：系测试时使用临时随机目录导致 NodeKey 未持久化、被控制面视作不同新设备，且旧临时节点被控制面定期回收；严格固定应用沙盒 `Dir` 路径并保持 `Ephemeral: false` 即可永久保持身份（详见 `docs/PERSISTENCE.md`） | ✅ 已解决并文档化 |
 | 双节点 TCP 数据在 DERP/DISCO 握手完成前可能被静默丢弃 | 集成测试假失败（连接已建立但无数据） | 建链前先做 TSMP Ping 预热（`waitReachable`），对齐上游 tsnet 测试做法 | 已规避 |
 | 控制面为官方 | 账号/设备额度、ACL、Tailnet Lock 均受官方约束 | 文档说明；`Config.ControlURL` 保留切换自建控制面的能力 | 已文档化 |
 

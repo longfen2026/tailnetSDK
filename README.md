@@ -65,6 +65,7 @@ cli/tailnetctl/   冒烟/验收 CLI
 bind/ffi/         语言无关 C ABI（Windows tailnet.dll / macOS·iOS c-archive）
 bind/dotnet/      零依赖 C# P/Invoke 封装（TailnetNode / TailnetListener / TailnetEventStream）
 bind/gomobile/    Android / 移动端 AAR 绑定（gomobile bind 产物 tailnet.aar）
+bind/apple/       macOS & iOS Swift 接入与 XCFramework 构建脚本 (TailnetKit)
 examples/         接入示例（quickstart 为 Go；windows-dotnet 为 .NET）
 build/            Makefile 与 Windows 构建脚本
 docs/             设计文档
@@ -151,6 +152,29 @@ val okHttpClient = OkHttpClient.Builder()
     .build()
 ```
 详见 [bind/gomobile/README.md](bind/gomobile/README.md)。
+
+## macOS / iOS 接入 (Swift / XCFramework)
+
+```bash
+# 在 macOS 上构建 XCFramework（包含 macOS 与 iOS Simulator/Device）
+chmod +x bind/apple/build-xcframework.sh
+./bind/apple/build-xcframework.sh        # -> dist/Tailnet.xcframework
+```
+
+Swift 最小接入：
+```swift
+import TailnetKit
+
+let client = TailnetClient()
+try client.configure(dir: stateDir, hostname: "my-apple-app")
+try client.start()
+
+// 让系统标准 URLSession 自动走 tailnet（SOCKS5 驱动）
+let session = URLSession.tailnetSession(client: client)
+let (data, _) = try await session.data(from: URL(string: "http://my-peer.tailnet:8080/api")!)
+```
+详见 [bind/apple/README.md](bind/apple/README.md)。
+
 
 ```
 
