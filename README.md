@@ -64,6 +64,7 @@ core/             平台无关 Go 核心（SDK 的唯一真相来源）
 cli/tailnetctl/   冒烟/验收 CLI
 bind/ffi/         语言无关 C ABI（Windows tailnet.dll / macOS·iOS c-archive）
 bind/dotnet/      零依赖 C# P/Invoke 封装（TailnetNode / TailnetListener / TailnetEventStream）
+bind/gomobile/    Android / 移动端 AAR 绑定（gomobile bind 产物 tailnet.aar）
 examples/         接入示例（quickstart 为 Go；windows-dotnet 为 .NET）
 build/            Makefile 与 Windows 构建脚本
 docs/             设计文档
@@ -120,6 +121,37 @@ if (!st.IsRunning())
 }
 
 using TcpClient tcp = await node.DialAsync("backend:443", TimeSpan.FromSeconds(10));
+
+## Android 接入 (AAR)
+
+```powershell
+# 构建 AAR 原生库（自动探测 Android SDK / NDK / JDK）
+pwsh -File build\build.ps1 aar          # -> dist\tailnet.aar
+```
+
+产物包含 `classes.jar` 及全部 4 种 ABI（`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`）的 `libgojni.so`。
+
+Kotlin 最小接入：
+```kotlin
+// 1. 初始化并启动
+val node = Tailnetmobile.newNode()
+node.configure(context.filesDir.resolve("tailnet").absolutePath, "my-android", "", "", false)
+node.start()
+
+// 2. 授权检查（配合 Custom Tabs 打开）
+if (node.state() == "NeedsLogin") {
+    node.startLoginInteractive()
+    val authUrl = node.authURL()
+    CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(authUrl))
+}
+
+// 3. 网络请求无缝走 tailnet（无需系统 VPN 权限）
+val okHttpClient = OkHttpClient.Builder()
+    .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", node.socks5Addr().split(":")[1].toInt())))
+    .build()
+```
+详见 [bind/gomobile/README.md](bind/gomobile/README.md)。
+
 ```
 
 `bind/dotnet/TailnetSdk.cs` 是**单文件、零 NuGet 依赖**的封装，可直接 `Compile Include` 进任意 .NET 工程；`TailnetListener.AcceptAsync()` 返回的 `TailnetBridgedConnection.RemoteTailnetEndPoint` 携带**真实 tailnet 对端地址**（桥接 socket 本身是 `127.0.0.1`），可直接交给 `WhoIsAsync` 做身份归因。

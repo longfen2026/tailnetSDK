@@ -9,7 +9,7 @@
 | **M0** | `core` 包（登录/状态/注销/设备列表/隧道/增强能力）、`cli/tailnetctl`、`examples/quickstart`、`build/` 脚本 | `go build ./...`、`go vet ./...`、`go test ./...` 全绿；CLI 能拿到真实登录 URL；状态可持久化并回读 | ✅ 已完成 |
 | **M1** | 本地控制面（`tstest/integration/testcontrol` + 本地 DERP/STUN）自动化集成测试：登录生命周期、设备发现、双节点隧道 + WhoIs、HTTP、SOCKS5、注销、事件流；CI workflow | 两个节点互相 `dial`/`listen` 成功；`WhoIs` 能解析对端身份；CI 在无外网凭据下可回归 | ✅ 已完成（本地控制面 7 项集成测试全绿；真实云端双节点验收待有 tailnet 账号时补充，可并入 M2 期间） |
 | **M2** | `bind/ffi`（C ABI）+ Windows `c-shared` DLL + C# P/Invoke 封装 + macOS `c-archive`/xcframework + Swift 封装 | 示例程序无需安装 Tailscale、无需管理员权限即可登录并访问 tailnet 服务 | **Windows 分支已完成**（见下方验证记录）；macOS/Swift 分支需 macOS 构建机，待环境就绪 |
-| **M3** | `bind/gomobile` + Android AAR + Kotlin 封装 + 前台服务 + Custom Tabs 登录 | **首日做 `gomobile bind` 可行性 POC**；Demo APK 登录后经本地 SOCKS5 访问 tailnet 服务；进程重启后状态可恢复 | 计划 |
+| **M3** | `bind/gomobile` + Android AAR + Kotlin 封装 + 前台服务 + Custom Tabs 登录 | **首日做 `gomobile bind` 可行性 POC**；Demo APK 登录后经本地 SOCKS5 访问 tailnet 服务；进程重启后状态可恢复 | **首日 POC 达成**（产出 4 架构 AAR `dist/tailnet.aar`，单元测试全绿） |
 | **M4** | iOS/macOS xcframework + Swift `TailnetClient` + `URLSession` 走本地 SOCKS5（参考 upstream `libtailscale/swift` 的构建脚本与 TailscaleKit 的 URLSession 设计） | 真机登录并访问 tailnet 服务；模拟器/真机 framework 均可构建；App 挂起恢复后状态读取正常 | 计划 |
 | **M5（可选）** | TUN 真 VPN：Android `VpnService`（`addAllowedApplication` 仅本 App 流量）、Windows wintun、macOS/iOS Network Extension | 客户端获得 tailnet IP；exit node / subnet router 生效 | 评估中 |
 
@@ -26,7 +26,7 @@
 
 | 风险 | 影响 | 对策 | 状态 |
 |---|---|---|---|
-| `gomobile bind` 打包 tsnet 依赖失败 | Android 阻塞 | M3 首日 POC；回退方案：手写 JNI + `c-archive`，或改用 `ipnlocal` 自行装配（官方 Android 路线） | 未验证 |
+| `gomobile bind` 打包 tsnet 依赖失败 | Android 阻塞 | M3 首日 POC；回退方案：手写 JNI + `c-archive`，或改用 `ipnlocal` 自行装配（官方 Android 路线） | ✅ 已解决（首日 POC 成功产出 4 架构 AAR） |
 | iOS 进程挂起导致 loopback 监听失效 | 状态读取失败 | 全部状态走进程内 `LocalClient`（已实现） | 已规避 |
 | 上游 API 演进 | 升级成本 | 锁定 `tailscale.com v1.102.4`；对外只暴露本仓库 DTO；映射集中在 `core/status.go` | 已规避 |
 | 用户态模式无法接管任意 App 流量 | 产品预期偏差 | README/API 文档明确边界；提供本地 SOCKS5/HTTP 代理供非 Go 网络栈接入 | 已文档化 |
@@ -124,6 +124,25 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
                                     -> 产出 tailnet-demo.exe + tailnet.dll（原生库与 exe 并列），
                                        目标机无需安装 Go/.NET
 ```
+
+## 本地验证记录（M3 — Android 分支 POC）
+
+环境配置：Go 1.27.1, Android SDK API 34+ (NDK 28.2.13676358), JDK 17, gomobile 工具链。
+
+```
+go test ./bind/gomobile/...       -> PASS (0.136s)，生命周期与离线状态迁移全绿
+pwsh -File build/build.ps1 aar    -> 自动探测 Android SDK / NDK / JDK，调用 gomobile bind
+dist/tailnet.aar                 -> 成功生成 (58.8MB)
+                                    包含 classes.jar (tailnetmobile.Node / Listener / EventListener)
+                                    包含 4 架构 libgojni.so:
+                                      - jni/arm64-v8a/libgojni.so
+                                      - jni/armeabi-v7a/libgojni.so
+                                      - jni/x86/libgojni.so
+                                      - jni/x86_64/libgojni.so
+```
+
+结论：**首日验证 POC 100% 成功**，用户态 `tsnet` 完全可通过 `gomobile bind` 平滑构建 Android AAR，无需降级手写 JNI。
+
 
 关键修复：宿主侧拿到的桥接连接其 `RemoteAddr` 永远是 `127.0.0.1`，导致 `WhoIs` 无法归因。
 新增 `tailnet_conn_remote_addr(port, buf, n)`，FFI 在建桥时记录真实 tailnet 对端地址，

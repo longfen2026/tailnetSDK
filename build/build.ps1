@@ -6,11 +6,12 @@
 #   pwsh -File build/build.ps1 cli
 #   pwsh -File build/build.ps1 native          # -> dist\tailnet.dll + dist\tailnet.h
 #   pwsh -File build/build.ps1 native -CC C:\tools\w64devkit\w64devkit\bin\gcc.exe
+#   pwsh -File build/build.ps1 aar             # -> dist\tailnet.aar (Android AAR via gomobile)
 #   pwsh -File build/build.ps1 all
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('build', 'vet', 'test', 'cli', 'native', 'tidy', 'all')]
+    [ValidateSet('build', 'vet', 'test', 'cli', 'native', 'aar', 'tidy', 'all')]
     [string]$Target = 'all',
     [string]$Configuration = 'default',
     # Path to a mingw-w64 gcc (required for -buildmode=c-shared). Auto-detected when empty.
@@ -92,6 +93,64 @@ function Build-Native {
     Write-Host "built $dll + $hdr" -ForegroundColor Green
 }
 
+# Build-Aar produces the Android AAR library (dist\tailnet.aar) via gomobile bind.
+function Build-Aar {
+    $gm = Get-Command gomobile -ErrorAction SilentlyContinue
+    if (-not $gm) { throw "gomobile not found on PATH. Run: go install golang.org/x/mobile/cmd/gomobile@latest" }
+
+    # Resolve Android SDK / NDK / Java environment
+    if (-not $env:ANDROID_HOME) {
+        $sdkCandidates = @(
+            (Join-Path $env:USERPROFILE 'Documents\SDKs\android'),
+            (Join-Path $env:LOCALAPPDATA 'Android\Sdk')
+        )
+        foreach ($c in $sdkCandidates) {
+            if (Test-Path $c) { $env:ANDROID_HOME = $c; break }
+        }
+    }
+    if (-not $env:ANDROID_HOME -or -not (Test-Path $env:ANDROID_HOME)) {
+        throw "ANDROID_HOME is not set or not found."
+    }
+
+    if (-not $env:ANDROID_NDK_HOME) {
+        $ndkDir = Join-Path $env:ANDROID_HOME 'ndk'
+        if (Test-Path $ndkDir) {
+            $latest = Get-ChildItem -Directory $ndkDir | Sort-Object Name -Descending | Select-Object -First 1
+            if ($latest) { $env:ANDROID_NDK_HOME = $latest.FullName }
+        }
+    }
+    if ($env:ANDROID_NDK_HOME) { $env:NDK_HOME = $env:ANDROID_NDK_HOME }
+
+    if (-not $env:JAVA_HOME) {
+        $jdkCandidates = @(
+            'C:\Program Files\Microsoft\jdk-17.0.20.101-hotspot',
+            'C:\Program Files\Java\jdk-17'
+        )
+        foreach ($j in $jdkCandidates) {
+            if (Test-Path $j) { $env:JAVA_HOME = $j; break }
+        }
+    }
+
+    $dist = Join-Path $root 'dist'
+    New-Item -ItemType Directory -Force -Path $dist | Out-Null
+    $aar = Join-Path $dist 'tailnet.aar'
+    $mobileDir = Join-Path $root 'bind\gomobile'
+
+    Write-Host "> (bind/gomobile) gomobile bind -target=android -androidapi=26 -o $aar ." -ForegroundColor Cyan
+    Push-Location $mobileDir
+    try {
+        & gomobile bind -target=android -androidapi=26 -o $aar .
+        if ($LASTEXITCODE -ne 0) { throw "gomobile bind failed with exit code $LASTEXITCODE" }
+    }
+    finally {
+        Pop-Location
+    }
+
+    if (-not (Test-Path $aar)) { throw "expected artifact missing: $aar" }
+    $sizeMB = [math]::Round(((Get-Item $aar).Length / 1MB), 2)
+    Write-Host "built $aar ($sizeMB MB)" -ForegroundColor Green
+}
+
 switch ($Target) {
     'build' { Invoke-Go @('build', './...') }
     'vet' { Invoke-Go @('vet', './...') }
@@ -99,6 +158,7 @@ switch ($Target) {
     'tidy' { Invoke-Go @('mod', 'tidy') }
     'cli' { Build-Cli }
     'native' { Build-Native }
+    'aar' { Build-Aar }
     'all' {
         Invoke-Go @('build', './...')
         Invoke-Go @('vet', './...')
